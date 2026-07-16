@@ -1,0 +1,33 @@
+paths:
+  d_root: D:/rrg
+  rocov2_dir: D:/rrg/raw/rocov2
+  features_dir: D:/rrg/features
+  checkpoints_dir: D:/rrg/checkpoints
+  cache_root: D:/rrg/cache
+data:
+  parquet:
+    train: data/train-*.parquet
+    valid: data/validation-*.parquet
+    test: data/test-*.parquet
+  image_col: image
+  caption_col: caption
+  cui_col: cui
+models:
+  vision_encoder: microsoft/swin-base-patch4-window7-224
+  decoder: GanjinZero/biobart-v2-base
+  concept_encoder: StanfordAIMI/RadBERT
+extract:
+  image_size: 224
+  batch_size: 32
+  num_workers: 4
+  dtype: float16
+train:
+  batch_size: 8
+  lr: 3.0e-05
+  epochs: 10
+  max_caption_tokens: 128
+  visual_dim: 1024
+  decoder_dim: 768
+  grad_accum: 2
+  warmup_steps: 500
+  save_every_epoch: true

@@ -1,0 +1,21 @@
+__pycache__/
+.ipynb_checkpoints/
+
+raw/
+features/
+cache/
+.venv/
+
+*.paraquet
+*.h5
+,vscode/
+.idea/
+*.log
+# Model checkpoints
+checkpoints/*.pt
+
+# Generated evaluation
+checkpoints/eval/
+
+# Training history (optional)
+checkpoints/history.json
