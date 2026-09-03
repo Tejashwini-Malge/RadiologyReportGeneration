@@ -19,3 +19,6 @@ checkpoints/eval/
 
 # Training history (optional)
 checkpoints/history.json
+
+.pytest_cache/
+.coverage

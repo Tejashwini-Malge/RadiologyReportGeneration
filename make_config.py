@@ -25,6 +25,8 @@ CFG = {
         "image_col":   "image",
         "caption_col": "caption",
         "cui_col":     "cui",
+        # join key for the Zenodo concept CSVs; extract_features.py scans it
+        "image_id_col": "image_id",
     },
     "models": {
         "vision_encoder":  "microsoft/swin-base-patch4-window7-224",

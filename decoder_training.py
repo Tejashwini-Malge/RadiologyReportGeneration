@@ -17,7 +17,6 @@ import json
 import time
 from pathlib import Path
 
-import yaml
 import h5py
 import numpy as np
 import torch
@@ -27,7 +26,9 @@ from transformers import (AutoTokenizer, AutoModelForSeq2SeqLM,
                           get_linear_schedule_with_warmup)
 from transformers.modeling_outputs import BaseModelOutput
 
-CFG = yaml.safe_load(open(Path(__file__).parent / "config.yaml", encoding="utf-8"))
+from rrg_config import load_config
+
+CFG = load_config()
 P, T = CFG["paths"], CFG["train"]
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -37,11 +38,23 @@ NUM_WORKERS = T.get("num_workers", 0)  # 0 on Windows, 2-4 on Colab/Linux
 
 
 class FeatureCaptionDS(Dataset):
-    """Reads one split's .h5 (features + caption). Everything it needs is in the file."""
-    def __init__(self, split):
+    """Reads one split's .h5 (features + caption). Everything it needs is in the file.
+
+    `limit` takes a SEEDED RANDOM subset, not the first N rows: the ROCOv2 shards
+    are not shuffled, so head-of-file rows can be skewed by modality or source.
+    The same seed gives the same subset across runs, so a resumed or repeated
+    experiment sees identical data."""
+    def __init__(self, split, limit=None, seed=0):
         self.path = Path(P["features_dir"]) / f"{split}.h5"
         with h5py.File(self.path, "r") as h5:
-            self.n = h5["features"].shape[0]
+            total = h5["features"].shape[0]
+        if limit is not None and limit < total:
+            rng = np.random.default_rng(seed)
+            # sorted: h5py fancy indexing requires increasing order, and it reads faster
+            self.index = np.sort(rng.choice(total, size=limit, replace=False))
+        else:
+            self.index = None
+        self.n = total if self.index is None else len(self.index)
         self.h5 = None  # opened lazily per worker
 
     def __len__(self):
@@ -50,6 +63,8 @@ class FeatureCaptionDS(Dataset):
     def __getitem__(self, i):
         if self.h5 is None:
             self.h5 = h5py.File(self.path, "r")
+        if self.index is not None:
+            i = int(self.index[i])
         feat = torch.from_numpy(self.h5["features"][i].astype(np.float32))  # [49,1024]
         cap = self.h5["caption"][i]
         cap = cap.decode("utf-8") if isinstance(cap, bytes) else str(cap)
@@ -93,8 +108,16 @@ class SwinToBioBART(nn.Module):
 
 # ---------------- checkpointing ----------------
 
+# Set by main() when --limit is used. A 10-sample run must never be able to
+# overwrite best.pt from a real run -- the same reasoning as _dry.h5 in
+# extract_features.py, where a stray re-run once destroyed 5.8 GB of features.
+RUN_LIMIT = None
+
+
 def ckpt_dir():
     d = Path(P["checkpoints_dir"])
+    if RUN_LIMIT is not None:
+        d = d / f"limit{RUN_LIMIT}"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -160,14 +183,25 @@ def main():
     ap.add_argument("--steps", type=int, default=50, help="steps for --smoke")
     ap.add_argument("--resume", type=str, default=None,
                     help="path to a .pt, or 'auto' to use checkpoints/last.pt")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="train on a seeded random subset of N rows "
+                         "(checkpoints go to checkpoints/limit<N>/)")
+    ap.add_argument("--seed", type=int, default=0,
+                    help="seed for --limit subset selection")
     args = ap.parse_args()
+
+    global RUN_LIMIT
+    RUN_LIMIT = args.limit
 
     print(f"Device: {DEVICE}   decoder: {CFG['models']['decoder']}")
     tokenizer = AutoTokenizer.from_pretrained(CFG["models"]["decoder"])
     collate = build_collate(tokenizer)
 
-    train_ds = FeatureCaptionDS("train")
-    val_ds = FeatureCaptionDS("valid")
+    train_ds = FeatureCaptionDS("train", limit=args.limit, seed=args.seed)
+    val_ds = FeatureCaptionDS("valid", limit=args.limit, seed=args.seed)
+    if args.limit:
+        print(f"SUBSET RUN: {len(train_ds)} train / {len(val_ds)} val rows "
+              f"(seed {args.seed}) -> {ckpt_dir()}")
     train_dl = DataLoader(train_ds, batch_size=T["batch_size"], shuffle=True,
                           collate_fn=collate, num_workers=NUM_WORKERS)
     val_dl = DataLoader(val_ds, batch_size=T["batch_size"], shuffle=False,
@@ -175,8 +209,16 @@ def main():
 
     model = SwinToBioBART().to(DEVICE)
     opt = torch.optim.AdamW(model.parameters(), lr=T["lr"])
-    total_steps = len(train_dl) * T["epochs"] // T["grad_accum"]
-    sched = get_linear_schedule_with_warmup(opt, T["warmup_steps"], total_steps)
+    total_steps = max(len(train_dl) * T["epochs"] // T["grad_accum"], 1)
+    warmup = T["warmup_steps"]
+    if warmup >= total_steps:
+        # config warmup is 500 steps. A 10-row subset is ~1 step/epoch, so the LR
+        # would ramp from zero and never arrive -- the run would learn nothing and
+        # look like a modelling failure rather than a scheduling one.
+        warmup = max(total_steps // 10, 1)
+        print(f"  warmup_steps {T['warmup_steps']} >= total_steps {total_steps}; "
+              f"clamped to {warmup} so the LR actually reaches {T['lr']:g}")
+    sched = get_linear_schedule_with_warmup(opt, warmup, total_steps)
     scaler = torch.amp.GradScaler("cuda", enabled=(DEVICE == "cuda"))
 
     start_epoch, best_val, history = 1, float("inf"), []

@@ -1,12 +1,22 @@
+"""
+bootstrap_env.py
+Create the D:/rrg directory tree and point the HF / Torch / pip caches at it,
+so multi-GB model downloads do not land on C:.
 
+NOT a setuptools file -- it was named setup.py, which meant `pip install .`
+would execute it and write env vars into the user registry.
+
+    python bootstrap_env.py
+
+On Colab/Linux, set RRG_ROOT instead and skip this entirely.
+"""
 import os
-import sys
 import subprocess
 from pathlib import Path
 
-import yaml
+from rrg_config import load_config
 
-CFG = yaml.safe_load(open(Path(__file__).parent / "config.yaml", encoding="utf-8"))
+CFG = load_config()
 P = CFG["paths"]
 
 # Folders that must exist on D:

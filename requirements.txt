@@ -1,9 +1,17 @@
-torch
-transformers
-datasets
-pyarrow
-numpy
-h5py
-Pillow
-PyYAML
-tqdm
+# Core pipeline: extract_features -> decoder_training
+torch>=2.1
+transformers>=4.40
+pyarrow>=14.0
+pandas>=2.0          # pyarrow Batch.to_pandas() in extract_features.py
+numpy>=1.24,<2.0     # torch/transformers wheels here are still numpy-1.x
+h5py>=3.9
+Pillow>=10.0
+PyYAML>=6.0
+
+# evaluate.py metrics -- imported lazily, so a missing one only fails at scoring time
+nltk>=3.8
+rouge-score>=0.1.2
+bert-score>=0.3.13   # skippable with --no-bertscore
+
+# tests
+pytest>=8.0

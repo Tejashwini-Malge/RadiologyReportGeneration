@@ -39,7 +39,6 @@ import glob
 import argparse
 from pathlib import Path
 
-import yaml
 import numpy as np
 import h5py
 import torch
@@ -47,7 +46,9 @@ from PIL import Image
 import pyarrow.dataset as ds
 from transformers import AutoImageProcessor, SwinModel
 
-CFG = yaml.safe_load(open(Path(__file__).parent / "config.yaml", encoding="utf-8"))
+from rrg_config import load_config
+
+CFG = load_config()
 P, DATA, EX = CFG["paths"], CFG["data"], CFG["extract"]
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

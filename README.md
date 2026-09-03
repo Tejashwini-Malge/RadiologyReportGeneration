@@ -63,14 +63,20 @@ The dataset consists of radiology images paired with corresponding medical capti
 ```text
 RadiologyReportGeneration/
 │
-├── extract_features.py
-├── decoder_training.py
-├── evaluate.py
-├── cui_classifer.py
-├── load_Dataset.py
-├── make_config.py
-├── setup.py
+├── bootstrap_env.py        # create dirs, point HF/Torch caches off C:
+├── make_config.py          # generates config.yaml
+├── rrg_config.py           # config loader + RRG_* env overrides
 ├── config.yaml
+│
+├── load_Dataset.py         # step 1: pre-flight check on the parquet shards
+├── extract_features.py     # step 2: frozen Swin -> .h5
+├── decoder_training.py     # step 3: train the BioBART decoder
+├── evaluate.py             # step 4: generate + score
+├── cui_classifier.py       # side experiment: do the features carry CUI signal?
+│
+├── tests/                  # pytest suite (no GPU, no dataset required)
+├── .github/workflows/      # CI
+├── pytest.ini
 ├── requirements.txt
 └── .gitignore
 ```
@@ -103,15 +109,48 @@ Install dependencies
 pip install -r requirements.txt
 ```
 
-Update the dataset paths inside `config.yaml`.
+### Where the data lives
+
+`config.yaml` ships with Windows paths (`D:/rrg/...`). You do **not** have to edit
+it to run elsewhere -- set `RRG_ROOT` and every path moves together:
+
+```bash
+export RRG_ROOT=/content/drive/MyDrive/rrg
+```
+
+Individual paths can be overridden on their own with `RRG_ROCOV2_DIR`,
+`RRG_FEATURES_DIR`, `RRG_CHECKPOINTS_DIR`, and `RRG_CACHE_ROOT`; these win over
+`RRG_ROOT`. Edit `make_config.py` and re-run it if you want to change the
+committed defaults -- `config.yaml` is generated, and CI checks the two agree.
 
 ---
 
 ## Workflow
 
+### Step 0 — Environment (Windows only, optional)
+
+```bash
+python bootstrap_env.py
+```
+
+Creates the `D:/rrg` tree and persists `HF_HOME` / `TORCH_HOME` / `PIP_CACHE_DIR`
+so multi-GB downloads do not land on `C:`. On Colab or Linux, set `RRG_ROOT`
+instead and skip this.
+
+---
+
 ### Step 1 — Dataset Preparation
 
-Configure the ROCOv2 dataset location inside `config.yaml`.
+Point `RRG_ROOT` (or `config.yaml`) at the ROCOv2 download, then:
+
+```bash
+python load_Dataset.py
+```
+
+Prints row counts, shard counts and the schema, and verifies that every column
+name in `config.yaml` -- including `image_id_col` -- actually exists. Do not skip
+this: a wrong column name here fails on the first batch of a multi-hour
+extraction run.
 
 ---
 
@@ -145,6 +184,24 @@ Evaluate generated reports on the test split.
 
 ---
 
+## Tests
+
+```bash
+pytest
+```
+
+The suite runs on CPU with no dataset present (~40 s). It covers the config
+loader and its overrides, CUI parsing and the multi-label metric math, caption
+collation and label masking, checkpoint save/resume round-trips, the evaluation
+metrics and degeneracy check, and -- most importantly -- the overwrite guard and
+dry-run isolation in `extract_features.py`, which exist because a stray re-run
+once destroyed a complete 5.8 GB `train.h5`.
+
+CI runs it on Python 3.10-3.12 and additionally checks that `config.yaml` still
+matches what `make_config.py` generates.
+
+---
+
 ## Technologies Used
 
 * Python
@@ -165,16 +222,17 @@ Evaluate generated reports on the test split.
 * Feature extraction pipeline validated
 * Decoder training pipeline implemented
 * Evaluation pipeline implemented
-* Full-scale GPU training pending
+* Test suite and CI in place
+* **Full-scale GPU training pending — no trained checkpoint or metrics yet**
 
 ---
 
 ## Future Improvements
 
 * Concept-guided report generation
-* Beam search decoding
-* BLEU, ROUGE and CIDEr evaluation
-* RadGraph-based evaluation
+* CIDEr evaluation (BLEU, ROUGE and BERTScore are implemented; beam search is
+  already the default at `--beams 4`)
+* RadGraph and GREEN based evaluation
 * Multi-GPU training
 * Clinical error analysis
 

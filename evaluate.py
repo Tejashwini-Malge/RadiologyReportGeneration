@@ -27,12 +27,14 @@ from pathlib import Path
 import h5py
 import numpy as np
 import torch
-import yaml
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer
 
+from rrg_config import load_config, enable_utf8_stdout
+
 HERE = Path(__file__).parent
-CFG = yaml.safe_load(open(HERE / "config.yaml", encoding="utf-8"))
+CFG = load_config()
+enable_utf8_stdout()
 P, T = CFG["paths"], CFG["train"]
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -217,7 +219,7 @@ def main():
     outdir = Path(P["checkpoints_dir"]) / "eval"
     outdir.mkdir(parents=True, exist_ok=True)
 
-    with open(outdir / f"predictions_{args.split}.json", "w") as f:
+    with open(outdir / f"predictions_{args.split}.json", "w", encoding="utf-8") as f:
         json.dump([{"pred": p, "ref": r} for p, r in zip(preds, refs)], f, indent=2)
 
     with open(outdir / f"samples_{args.split}.txt", "w", encoding="utf-8") as f:
@@ -240,7 +242,7 @@ def main():
         metrics.update(compute_bertscore(preds, refs, args.bertscore_model))
         metrics["bertscore_model"] = args.bertscore_model
 
-    with open(outdir / f"metrics_{args.split}.json", "w") as f:
+    with open(outdir / f"metrics_{args.split}.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
     print("\n--- metrics ---")

@@ -33,10 +33,10 @@ import h5py
 import numpy as np
 import torch
 import torch.nn as nn
-import yaml
 
-HERE = Path(__file__).parent
-CFG = yaml.safe_load(open(HERE / "config.yaml", encoding="utf-8"))
+from rrg_config import load_config
+
+CFG = load_config()
 P, T = CFG["paths"], CFG["train"]
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

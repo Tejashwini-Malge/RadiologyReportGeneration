@@ -1,12 +1,18 @@
 import glob
 from pathlib import Path
 
-import yaml
 import pyarrow.dataset as ds
 
-CFG = yaml.safe_load(open(Path(__file__).parent / "config.yaml", encoding="utf-8"))
+from rrg_config import load_config, enable_utf8_stdout
+
+CFG = load_config()
+enable_utf8_stdout()
 ROCOV2_DIR = CFG["paths"]["rocov2_dir"]
 DATA = CFG["data"]
+
+# keys that may be absent from config.yaml; must match extract_features.ID_COL
+DEFAULTS = {"image_col": "image", "caption_col": "caption",
+            "cui_col": "cui", "image_id_col": "image_id"}
 
 
 def human(n):
@@ -71,15 +77,28 @@ def _describe_row(row, cols):
         print(f"    caption : ({len(cap.split())} words) {cap[:90]}")
     if cui in cols:
         print(f"    cui     : {row[cui]}")
+    iid = DATA.get("image_id_col", DEFAULTS["image_id_col"])
+    if iid in cols:
+        print(f"    image_id: {row[iid]}")
 
 
 def _check_cols(cols):
+    """extract_features.py scans image_col/caption_col/cui_col AND image_id_col.
+    A missing one kills the multi-hour run at its first batch, so check all four
+    here -- where checking is free. Returns True if every column is present."""
     print("Config column check:")
-    for key in ("image_col", "caption_col", "cui_col"):
-        name = DATA[key]
+    ok_all = True
+    for key in ("image_col", "caption_col", "cui_col", "image_id_col"):
+        name = DATA.get(key, DEFAULTS[key])
         ok = name in cols
+        ok_all &= ok
         note = "" if ok else f"   <-- NOT in {cols} ; fix config.data.{key}"
         print(f"  {'ok ' if ok else '!! '}config.data.{key} = '{name}'{note}")
+    if not ok_all:
+        print()
+        print("  !! extract_features.py will fail on the first batch. "
+              "Fix config.yaml before running it.")
+    return ok_all
 
 
 if __name__ == "__main__":

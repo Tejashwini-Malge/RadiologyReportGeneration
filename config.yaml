@@ -12,6 +12,7 @@ data:
   image_col: image
   caption_col: caption
   cui_col: cui
+  image_id_col: image_id
 models:
   vision_encoder: microsoft/swin-base-patch4-window7-224
   decoder: GanjinZero/biobart-v2-base
