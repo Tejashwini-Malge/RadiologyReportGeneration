@@ -219,3 +219,61 @@ def test_a_subset_run_cannot_overwrite_real_checkpoints(big_features_h5, monkeyp
     assert subset != real
     assert subset.name == "limit10"
     assert subset.parent == real
+
+
+# ---------------- decoder is swappable ----------------
+
+def test_the_decoder_is_read_from_config_not_hardcoded():
+    """Slide-level claim: encoder, fusion and decoder are independently
+    swappable. Nothing in the model class may name a specific decoder."""
+    import ast
+    import inspect
+    src = inspect.getsource(dt.SwinToDecoder)
+    assert 'CFG["models"]["decoder"]' in src
+
+    # strip docstrings -- naming BioBART as an example in prose is fine,
+    # naming it in code is not
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)                 and isinstance(node.value.value, str):
+            node.value.value = ""
+    code = ast.unparse(tree)
+    for hardcoded in ("biobart", "BioBART", "GanjinZero", "facebook/bart"):
+        assert hardcoded not in code, f"{hardcoded} is hardcoded in the model class"
+
+
+def test_dim_guard_rejects_a_decoder_whose_hidden_size_disagrees(monkeypatch):
+    """Swapping to a decoder with a different hidden size must fail with a
+    readable message, not an opaque shape error inside cross-attention."""
+    import types
+    monkeypatch.setitem(dt.T, "decoder_dim", 768)
+    model = dt.SwinToDecoder.__new__(dt.SwinToDecoder)
+    model.decoder = types.SimpleNamespace(config=types.SimpleNamespace(d_model=1024))
+    with pytest.raises(ValueError, match="decoder_dim mismatch"):
+        model._check_decoder_dim()
+
+
+def test_dim_guard_names_the_fix(monkeypatch):
+    import types
+    monkeypatch.setitem(dt.T, "decoder_dim", 768)
+    model = dt.SwinToDecoder.__new__(dt.SwinToDecoder)
+    model.decoder = types.SimpleNamespace(config=types.SimpleNamespace(d_model=512))
+    with pytest.raises(ValueError, match="Set train.decoder_dim to 512"):
+        model._check_decoder_dim()
+
+
+def test_dim_guard_accepts_a_matching_decoder(monkeypatch):
+    import types
+    monkeypatch.setitem(dt.T, "decoder_dim", 768)
+    model = dt.SwinToDecoder.__new__(dt.SwinToDecoder)
+    model.decoder = types.SimpleNamespace(config=types.SimpleNamespace(d_model=768))
+    model._check_decoder_dim()          # must not raise
+
+
+def test_dim_guard_handles_configs_using_hidden_size(monkeypatch):
+    """BART exposes d_model; other architectures expose hidden_size."""
+    import types
+    monkeypatch.setitem(dt.T, "decoder_dim", 768)
+    model = dt.SwinToDecoder.__new__(dt.SwinToDecoder)
+    model.decoder = types.SimpleNamespace(config=types.SimpleNamespace(hidden_size=768))
+    model._check_decoder_dim()          # must not raise

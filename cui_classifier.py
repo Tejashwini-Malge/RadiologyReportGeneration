@@ -1,5 +1,5 @@
 """
-05_train_cui_classifier.py
+cui_classifier.py
 Stage 1 of concept conditioning: predict UMLS CUIs from the FROZEN Swin pooler feature.
 
 This exists to answer ONE question before any fusion code gets written:
@@ -14,9 +14,9 @@ Needs only the CUI *codes*. The UMLS code->term mapping (for RadBERT) is a separ
 problem and is not required here.
 
 Usage:
-    python 05_train_cui_classifier.py --limit 2000     # dry run
-    python 05_train_cui_classifier.py
-    python 05_train_cui_classifier.py --min-freq 50 --hidden 1024
+    python cui_classifier.py --limit 2000     # dry run
+    python cui_classifier.py
+    python cui_classifier.py --min-freq 50 --hidden 1024
 
 Outputs (to <checkpoints_dir>/):
     cui_classifier.pt        weights + vocab + tuned threshold
@@ -55,7 +55,7 @@ def parse_cuis(s):
 def load_split(split, limit=None):
     path = Path(P["features_dir"]) / f"{split}.h5"
     if not path.exists():
-        raise FileNotFoundError(f"{path} -- run 02 for split '{split}' first")
+        raise FileNotFoundError(f"{path} -- run extract_features.py for split '{split}' first")
     with h5py.File(path, "r") as h5:
         n = h5["pooler"].shape[0]
         if limit:

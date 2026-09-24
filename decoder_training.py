@@ -1,16 +1,17 @@
 """
-03_train_decoder.py
-Train the BioBART decoder to generate captions from FROZEN Swin features.
-A small projection (1024 -> 768) + BioBART decoder are the ONLY trainable parts.
+decoder_training.py
+Train a seq2seq decoder to generate captions from FROZEN Swin features.
+A small projection (1024 -> 768) + the seq2seq decoder are the ONLY trainable
+parts. The decoder is set by models.decoder in config.yaml.
 
 Resume-capable: checkpoints store optimizer / scheduler / scaler state, so a run
 stopped after epoch N continues correctly from epoch N+1.
 
 Usage:
-    python 03_train_decoder.py
-    python 03_train_decoder.py --smoke --steps 500
-    python 03_train_decoder.py --resume D:/rrg/checkpoints/last.pt
-    python 03_train_decoder.py --resume auto        # picks up last.pt if it exists
+    python decoder_training.py
+    python decoder_training.py --limit 1000        # short, checkpointed subset run
+    python decoder_training.py --resume D:/rrg/checkpoints/last.pt
+    python decoder_training.py --resume auto        # picks up last.pt if it exists
 """
 import argparse
 import json
@@ -83,27 +84,49 @@ def build_collate(tokenizer):
     return collate
 
 
-class SwinToBioBART(nn.Module):
+class SwinToDecoder(nn.Module):
+    """Frozen visual features -> linear projection -> any seq2seq decoder.
+
+    The decoder is whatever `models.decoder` names in config.yaml; nothing here
+    is BioBART-specific. BioBART-v2-base and ClinicalT5-base both use hidden
+    size 768, so swapping between them is a one-line config change.
+    """
     def __init__(self):
         super().__init__()
-        self.proj = nn.Linear(T["visual_dim"], T["decoder_dim"])   # 1024 -> 768
-        self.bart = AutoModelForSeq2SeqLM.from_pretrained(CFG["models"]["decoder"])
+        self.proj = nn.Linear(T["visual_dim"], T["decoder_dim"])
+        self.decoder = AutoModelForSeq2SeqLM.from_pretrained(CFG["models"]["decoder"])
+        self._check_decoder_dim()
+
+    def _check_decoder_dim(self):
+        """The projection writes into the decoder's cross-attention, so its
+        output width must equal the decoder's hidden size. Without this the
+        mismatch surfaces as an opaque shape error inside the attention block."""
+        dcfg = self.decoder.config
+        actual = getattr(dcfg, "d_model", None) or getattr(dcfg, "hidden_size", None)
+        if actual is not None and actual != T["decoder_dim"]:
+            raise ValueError(
+                f"decoder_dim mismatch: config.yaml says {T['decoder_dim']} but "
+                f"{CFG['models']['decoder']} has hidden size {actual}. "
+                f"Set train.decoder_dim to {actual} in make_config.py and re-run it."
+            )
 
     def forward(self, feats, labels=None):
         enc = self.proj(feats)                                # [B,49,768]
         attn = torch.ones(enc.shape[:2], dtype=torch.long, device=enc.device)
         enc_out = BaseModelOutput(last_hidden_state=enc)
-        return self.bart(encoder_outputs=enc_out, attention_mask=attn, labels=labels)
+        return self.decoder(encoder_outputs=enc_out, attention_mask=attn, labels=labels)
 
     @torch.no_grad()
-    def generate(self, feats, max_new_tokens=None):
+    def generate(self, feats, max_new_tokens=None, num_beams=4):
+        """Single place where visual features are turned into token ids.
+        evaluate.py calls this rather than reimplementing the projection."""
         if max_new_tokens is None:
             max_new_tokens = T["max_caption_tokens"]
         enc = self.proj(feats)
         attn = torch.ones(enc.shape[:2], dtype=torch.long, device=enc.device)
         enc_out = BaseModelOutput(last_hidden_state=enc)
-        return self.bart.generate(encoder_outputs=enc_out, attention_mask=attn,
-                                  max_new_tokens=max_new_tokens, num_beams=4)
+        return self.decoder.generate(encoder_outputs=enc_out, attention_mask=attn,
+                                  max_new_tokens=max_new_tokens, num_beams=num_beams)
 
 
 # ---------------- checkpointing ----------------
@@ -179,8 +202,6 @@ def fmt(sec):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--smoke", action="store_true")
-    ap.add_argument("--steps", type=int, default=50, help="steps for --smoke")
     ap.add_argument("--resume", type=str, default=None,
                     help="path to a .pt, or 'auto' to use checkpoints/last.pt")
     ap.add_argument("--limit", type=int, default=None,
@@ -207,7 +228,7 @@ def main():
     val_dl = DataLoader(val_ds, batch_size=T["batch_size"], shuffle=False,
                         collate_fn=collate, num_workers=NUM_WORKERS)
 
-    model = SwinToBioBART().to(DEVICE)
+    model = SwinToDecoder().to(DEVICE)
     opt = torch.optim.AdamW(model.parameters(), lr=T["lr"])
     total_steps = max(len(train_dl) * T["epochs"] // T["grad_accum"], 1)
     warmup = T["warmup_steps"]
@@ -256,8 +277,6 @@ def main():
                 print(f"  epoch {epoch} step {step}/{len(train_dl)} "
                       f"loss {loss.item() * T['grad_accum']:.4f} "
                       f"| elapsed {fmt(el)} eta {fmt(eta)}")
-            if args.smoke and step >= args.steps:
-                print(f"  smoke run: stopping after {args.steps} steps."); return
 
         val_loss = evaluate(model, val_dl)
         train_min = (time.time() - t0) / 60

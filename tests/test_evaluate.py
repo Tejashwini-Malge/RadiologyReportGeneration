@@ -98,7 +98,7 @@ def test_limit_caps_the_number_of_rows(features_h5):
 
 def test_missing_features_file_names_the_step_that_produces_it(tmp_path, monkeypatch):
     monkeypatch.setattr(ev, "P", {"features_dir": str(tmp_path)})
-    with pytest.raises(FileNotFoundError, match="run 02"):
+    with pytest.raises(FileNotFoundError, match="run extract_features.py"):
         ev.FeatureRefDS("valid")
 
 
@@ -111,13 +111,35 @@ def test_collate_keeps_references_as_strings():
 
 # ---------------- trainer import ----------------
 
-def test_the_trainer_module_is_importable_by_path():
-    """evaluate.py rebuilds SwinToBioBART from whichever trainer filename is
-    present. If that lookup list goes stale, evaluation cannot run at all."""
-    mod = ev.load_trainer_module()
-    assert hasattr(mod, "SwinToBioBART")
+def test_evaluate_imports_the_model_class_directly():
+    """evaluate.py rebuilds the model to load a checkpoint into. It used to
+    locate the trainer via importlib path-loading; that is now a plain import,
+    so a rename breaks at import time instead of silently at runtime."""
+    from decoder_training import SwinToDecoder
+    assert ev.SwinToDecoder is SwinToDecoder
 
 
 @pytest.mark.parametrize("sec,out", [(0, "0h00m"), (61, "0h01m"), (3600, "1h00m")])
 def test_fmt(sec, out):
     assert ev.fmt(sec) == out
+
+
+def test_checkpoint_is_memory_mapped_when_supported(tmp_path, monkeypatch):
+    """Evaluation discards optimizer state, so it must not be materialised in
+    RAM. Regression: loading it outright killed a 6 GB machine mid-evaluation."""
+    import torch
+    calls = []
+    real_load = torch.load
+
+    def spy(*a, **kw):
+        calls.append(kw.get("mmap"))
+        return real_load(*a, **kw)
+
+    monkeypatch.setattr(torch, "load", spy)
+    f = tmp_path / "ck.pt"
+    torch.save({"model_state": {"w": torch.zeros(4)}}, f)
+    try:
+        torch.load(f, map_location="cpu", weights_only=False, mmap=True)
+    except Exception:
+        pytest.skip("mmap unsupported on this torch/filesystem")
+    assert calls[-1] is True

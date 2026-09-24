@@ -1,14 +1,14 @@
 """
-04_evaluate.py
+evaluate.py
 Load a trained checkpoint, generate captions for a split, dump predictions,
 and score them with BLEU-1..4 / ROUGE-1,2,L / BERTScore.
 
 GREEN is NOT here on purpose -- it is a 7B LLM and needs its own run. See notes.
 
 Usage:
-    python 04_evaluate.py --ckpt /content/drive/MyDrive/rrg/checkpoints/best.pt --limit 64
-    python 04_evaluate.py --ckpt /content/drive/MyDrive/rrg/checkpoints/best.pt
-    python 04_evaluate.py --ckpt best.pt --split valid --no-bertscore
+    python evaluate.py --ckpt /content/drive/MyDrive/rrg/checkpoints/best.pt --limit 64
+    python evaluate.py --ckpt /content/drive/MyDrive/rrg/checkpoints/best.pt
+    python evaluate.py --ckpt best.pt --split valid --no-bertscore
 
 Outputs (to <checkpoints_dir>/eval/):
     predictions_<split>.json   every (pred, ref) pair
@@ -16,10 +16,9 @@ Outputs (to <checkpoints_dir>/eval/):
     metrics_<split>.json       the numbers
 
 Deps:
-    pip install nltk rouge-score bert-score
+    pip install -r requirements.txt
 """
 import argparse
-import importlib.util
 import json
 import time
 from pathlib import Path
@@ -30,30 +29,13 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer
 
+from decoder_training import SwinToDecoder
 from rrg_config import load_config, enable_utf8_stdout
 
-HERE = Path(__file__).parent
 CFG = load_config()
 enable_utf8_stdout()
 P, T = CFG["paths"], CFG["train"]
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-
-def load_trainer_module():
-    """Import the trainer to reuse SwinToBioBART, whatever it is named locally.
-    Module names cannot start with a digit, so import by path."""
-    for name in ("decoder_training.py", "03_train_decoder.py", "train_decoder.py"):
-        p = HERE / name
-        if p.exists():
-            spec = importlib.util.spec_from_file_location("trainer", p)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            print(f"model class from: {name}")
-            return mod
-    raise FileNotFoundError(
-        "No trainer script found next to 04_evaluate.py "
-        "(looked for decoder_training.py / 03_train_decoder.py)"
-    )
 
 
 class FeatureRefDS(Dataset):
@@ -61,7 +43,7 @@ class FeatureRefDS(Dataset):
     def __init__(self, split, limit=None):
         self.path = Path(P["features_dir"]) / f"{split}.h5"
         if not self.path.exists():
-            raise FileNotFoundError(f"{self.path} -- run 02 for split '{split}' first")
+            raise FileNotFoundError(f"{self.path} -- run extract_features.py for split '{split}' first")
         with h5py.File(self.path, "r") as h5:
             self.n = h5["features"].shape[0]
         if limit:
@@ -98,15 +80,7 @@ def generate_all(model, tokenizer, loader, beams, max_new):
     t0 = time.time()
     for bi, (feats, caps) in enumerate(loader):
         feats = feats.to(DEVICE)
-        enc = model.proj(feats)
-        attn = torch.ones(enc.shape[:2], dtype=torch.long, device=enc.device)
-        from transformers.modeling_outputs import BaseModelOutput
-        out = model.bart.generate(
-            encoder_outputs=BaseModelOutput(last_hidden_state=enc),
-            attention_mask=attn,
-            max_new_tokens=max_new,
-            num_beams=beams,
-        )
+        out = model.generate(feats, max_new_tokens=max_new, num_beams=beams)
         preds += tokenizer.batch_decode(out, skip_special_tokens=True)
         refs += caps
         if bi % 10 == 0:
@@ -120,7 +94,6 @@ def generate_all(model, tokenizer, loader, beams, max_new):
 
 def compute_bleu(preds, refs):
     """BLEU-1..4, corpus level. This is what the RRG literature reports."""
-    import nltk
     from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
     hyp = [p.lower().split() for p in preds]
     ref = [[r.lower().split()] for r in refs]
@@ -185,9 +158,14 @@ def main():
     ap.add_argument("--bertscore-model", default="roberta-large")
     args = ap.parse_args()
 
-    trainer = load_trainer_module()
-
-    ck = torch.load(args.ckpt, map_location=DEVICE, weights_only=False)
+    # Evaluation only needs model_state, but the checkpoint also carries the
+    # optimizer/scheduler state needed for --resume (~1.1 GB for BioBART-base).
+    # mmap leaves those on disk instead of materialising them in RAM; without it
+    # a low-memory machine can die loading a checkpoint it is about to discard.
+    try:
+        ck = torch.load(args.ckpt, map_location=DEVICE, weights_only=False, mmap=True)
+    except (TypeError, RuntimeError, ValueError):
+        ck = torch.load(args.ckpt, map_location=DEVICE, weights_only=False)
     tcfg = ck.get("config", {}).get("train", {})
     print(f"ckpt: {Path(args.ckpt).name}  epoch={ck.get('epoch')}  "
           f"val_loss={ck.get('val_loss'):.4f}")
@@ -206,7 +184,7 @@ def main():
         print(f"  note: using ckpt's max_caption_tokens={max_new}")
 
     tokenizer = AutoTokenizer.from_pretrained(CFG["models"]["decoder"])
-    model = trainer.SwinToBioBART().to(DEVICE)
+    model = SwinToDecoder().to(DEVICE)
     model.load_state_dict(ck["model_state"])
 
     ds = FeatureRefDS(args.split, limit=args.limit)

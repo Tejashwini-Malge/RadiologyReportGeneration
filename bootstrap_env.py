@@ -76,7 +76,7 @@ def main():
     print(f"Free space on D: ~ {free_gb:.1f} GB")
     if free_gb < 25:
         print("  !! Under 25 GB free. Features(~8GB)+checkpoints may not fit. Free space first.")
-    print("\nDONE. Close and reopen your terminal, then run 01_load_rocov2.py")
+    print("\nDONE. Close and reopen your terminal, then run load_Dataset.py")
 
 
 def _free_gb(path):

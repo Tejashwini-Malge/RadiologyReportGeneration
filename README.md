@@ -37,6 +37,24 @@ The dataset consists of radiology images paired with corresponding medical capti
 
 ---
 
+## Model status
+
+| Component | Status |
+|---|---|
+| Swin-Base encoder (frozen) | implemented |
+| Linear projection 1024 → 768 | implemented |
+| **BioBART-v2-base decoder** | **implemented — this is the current baseline** |
+| ClinicalT5 decoder | planned for Stage 2; ships Flax weights only, needs `from_flax=True` |
+| Concept (CUI) token branch | not implemented; `models.concept_encoder` is reserved and read by no code |
+| CUI classifier (diagnostic) | implemented as a standalone experiment |
+
+The decoder is set by `models.decoder` in `config.yaml` and nothing in the code
+is BioBART-specific — any seq2seq model with hidden size 768 works unchanged.
+A guard raises a readable error if the decoder's hidden size disagrees with
+`train.decoder_dim`.
+
+---
+
 ## Model Architecture
 
 ```text
@@ -170,7 +188,20 @@ This extracts frozen Swin Transformer features and stores them in HDF5 format.
 python decoder_training.py
 ```
 
-Train the BioBART decoder using the extracted visual features.
+Train the BioBART decoder using the extracted visual features. Only a linear
+projection (1024 → 768) and the decoder are trainable; the Swin encoder stays
+frozen and is never loaded at this stage.
+
+For a short run on a seeded random subset — useful for smoke-testing a new
+machine or comparing configurations without a full pass:
+
+```bash
+python decoder_training.py --limit 1000
+```
+
+Subset checkpoints are written to `checkpoints/limit1000/`, so they can never
+overwrite a full run's `best.pt`. Training is resume-capable: `--resume auto`
+continues from `last.pt`, which matters on Kaggle's 9-hour session limit.
 
 ---
 

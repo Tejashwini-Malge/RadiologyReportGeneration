@@ -30,13 +30,16 @@ CFG = {
     },
     "models": {
         "vision_encoder":  "microsoft/swin-base-patch4-window7-224",
+        # Implemented baseline. The decoder is swappable -- any seq2seq model with
+        # hidden size 768 works with no code change (see SwinToDecoder).
+        # Stage 2 target is ClinicalT5, which currently ships Flax weights only and
+        # would need from_flax=True plus jax/flax installed.
         "decoder":         "GanjinZero/biobart-v2-base",
+        # reserved for the concept branch (not yet implemented -- no code reads this)
         "concept_encoder": "StanfordAIMI/RadBERT",
     },
     "extract": {
-        "image_size":  224,
         "batch_size":  32,
-        "num_workers": 4,
         "dtype":       "float16",
     },
     "train": {
@@ -49,6 +52,8 @@ CFG = {
         "grad_accum":         2,
         "warmup_steps":       500,
         "save_every_epoch":   True,
+        "num_workers":        0,     # 0 on Windows; 2-4 on Colab/Linux
+        "early_stop_patience": 2,    # epochs without val improvement before stopping
     },
 }
 

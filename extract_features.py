@@ -1,5 +1,5 @@
 """
-02_extract_features.py  (v3.1 -- v3 + overwrite guard + isolated dry runs)
+extract_features.py  (v3.1 -- v3 + overwrite guard + isolated dry runs)
 Run the FROZEN Swin-base encoder over every split ONCE and write features to .h5.
 After this you never touch raw images again -- training runs on these .h5 files.
 
@@ -28,11 +28,11 @@ Output per split:  <features_dir>/<split>.h5      (dry runs: <split>_dry.h5)
     attrs    : complete (bool), n_written (int)
 
 Usage:
-    python 02_extract_features.py --split valid --limit 64   # dry run -> valid_dry.h5
-    python 02_extract_features.py --split train
-    python 02_extract_features.py                            # valid, test, train
-    python 02_extract_features.py --split train --overwrite  # force re-extract
-    python 02_extract_features.py --verify-only
+    python extract_features.py --split valid --limit 64   # dry run -> valid_dry.h5
+    python extract_features.py --split train
+    python extract_features.py                            # valid, test, train
+    python extract_features.py --split train --overwrite  # force re-extract
+    python extract_features.py --verify-only
 """
 import io
 import glob
