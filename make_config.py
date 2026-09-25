@@ -51,7 +51,12 @@ CFG = {
         "decoder_dim":        768,
         "grad_accum":         2,
         "warmup_steps":       500,
-        "save_every_epoch":   True,
+        # False: keep only best.pt + last.pt. Each checkpoint carries optimizer
+        # + scheduler state (~1.66 GB for BioBART-base) and its size is driven
+        # by the model, not the dataset -- 10 epochs is ~19 GB, which overruns
+        # Kaggle's 20 GB working dir mid-run. last.pt is written every epoch
+        # regardless, so --resume auto is unaffected.
+        "save_every_epoch":   False,
         "num_workers":        0,     # 0 on Windows; 2-4 on Colab/Linux
         "early_stop_patience": 2,    # epochs without val improvement before stopping
     },

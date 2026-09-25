@@ -6,9 +6,10 @@ and score them with BLEU-1..4 / ROUGE-1,2,L / BERTScore.
 GREEN is NOT here on purpose -- it is a 7B LLM and needs its own run. See notes.
 
 Usage:
-    python evaluate.py --ckpt /content/drive/MyDrive/rrg/checkpoints/best.pt --limit 64
-    python evaluate.py --ckpt /content/drive/MyDrive/rrg/checkpoints/best.pt
+    python evaluate.py --ckpt best.pt                     # resolved against checkpoints_dir
     python evaluate.py --ckpt best.pt --split valid --no-bertscore
+    python evaluate.py --ckpt limit1000/best.pt --limit 64
+    python evaluate.py --ckpt /abs/path/to/best.pt        # absolute still works
 
 Outputs (to <checkpoints_dir>/eval/):
     predictions_<split>.json   every (pred, ref) pair
@@ -147,9 +148,32 @@ def degeneracy_report(preds):
 
 # ---------------- main ----------------
 
+def resolve_ckpt(name):
+    """Accept either a full path or a bare checkpoint name.
+
+    decoder_training.py writes into <checkpoints_dir>, but --ckpt used to be
+    handed straight to torch.load, so the documented `--ckpt best.pt` only
+    worked if the cwd happened to BE that directory. Resolve bare names (and
+    subset runs like limit1000/best.pt) against checkpoints_dir; an existing
+    path or an absolute path is always honoured as-is.
+    """
+    p = Path(name)
+    if p.exists() or p.is_absolute():
+        return p
+    cand = Path(P["checkpoints_dir"]) / name
+    if cand.exists():
+        return cand
+    raise SystemExit(
+        f"checkpoint not found: {name}\n"
+        f"  tried: {p.resolve()}\n"
+        f"  tried: {cand}\n"
+        f"  (checkpoints_dir = {P['checkpoints_dir']})")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", required=True)
+    ap.add_argument("--ckpt", required=True,
+                    help="checkpoint name (resolved against checkpoints_dir) or a full path")
     ap.add_argument("--split", default="test", choices=["test", "valid", "train"])
     ap.add_argument("--limit", type=int, default=None, help="cap rows (dry run)")
     ap.add_argument("--batch-size", type=int, default=32)
@@ -162,12 +186,13 @@ def main():
     # optimizer/scheduler state needed for --resume (~1.1 GB for BioBART-base).
     # mmap leaves those on disk instead of materialising them in RAM; without it
     # a low-memory machine can die loading a checkpoint it is about to discard.
+    ckpt_path = resolve_ckpt(args.ckpt)
     try:
-        ck = torch.load(args.ckpt, map_location=DEVICE, weights_only=False, mmap=True)
+        ck = torch.load(ckpt_path, map_location=DEVICE, weights_only=False, mmap=True)
     except (TypeError, RuntimeError, ValueError):
-        ck = torch.load(args.ckpt, map_location=DEVICE, weights_only=False)
+        ck = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
     tcfg = ck.get("config", {}).get("train", {})
-    print(f"ckpt: {Path(args.ckpt).name}  epoch={ck.get('epoch')}  "
+    print(f"ckpt: {ckpt_path.name}  epoch={ck.get('epoch')}  "
           f"val_loss={ck.get('val_loss'):.4f}")
 
     # Guard: the model is rebuilt from THIS config.yaml. If it disagrees with the

@@ -29,6 +29,6 @@ train:
   decoder_dim: 768
   grad_accum: 2
   warmup_steps: 500
-  save_every_epoch: true
+  save_every_epoch: false
   num_workers: 0
   early_stop_patience: 2
