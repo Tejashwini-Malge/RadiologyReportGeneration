@@ -11,10 +11,14 @@ Usage:
     python evaluate.py --ckpt limit1000/best.pt --limit 64
     python evaluate.py --ckpt /abs/path/to/best.pt        # absolute still works
 
-Outputs (to <checkpoints_dir>/eval/):
-    predictions_<split>.json   every (pred, ref) pair
-    samples_<split>.txt        first 30 pairs, human-readable -- READ THIS FIRST
-    metrics_<split>.json       the numbers
+Outputs (to an eval/ dir NEXT TO the checkpoint being scored, so a subset run
+writes to checkpoints/limit1000/eval/ and cannot touch a full run's numbers):
+    predictions_<tag>.json     every (pred, ref) pair
+    samples_<tag>.txt          first 30 pairs, human-readable -- READ THIS FIRST
+    metrics_<tag>.json         the numbers
+
+<tag> is the split, plus _limit<N> when --limit caps the rows, because scoring
+8 rows and scoring all 9,927 are different results and must not share a filename.
 
 Deps:
     pip install -r requirements.txt
@@ -170,6 +174,23 @@ def resolve_ckpt(name):
         f"  (checkpoints_dir = {P['checkpoints_dir']})")
 
 
+def eval_outdir(ckpt_path):
+    """Put eval outputs next to the checkpoint they were produced from.
+
+    This used to be <checkpoints_dir>/eval/ unconditionally, which meant
+    `--ckpt limit1000/best.pt` wrote its metrics over the full run's -- the
+    exact hazard decoder_training.ckpt_dir() already guards against for
+    weights, never mirrored on the eval side. A subset checkpoint now scores
+    into checkpoints/limit1000/eval/ and a full one into checkpoints/eval/.
+    """
+    return ckpt_path.parent / "eval"
+
+
+def output_tag(split, limit):
+    """Row-capped runs get their own filenames; see the module docstring."""
+    return split if limit is None else f"{split}_limit{limit}"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True,
@@ -219,13 +240,14 @@ def main():
 
     preds, refs = generate_all(model, tokenizer, dl, args.beams, max_new)
 
-    outdir = Path(P["checkpoints_dir"]) / "eval"
+    outdir = eval_outdir(ckpt_path)
     outdir.mkdir(parents=True, exist_ok=True)
+    tag = output_tag(args.split, args.limit)
 
-    with open(outdir / f"predictions_{args.split}.json", "w", encoding="utf-8") as f:
+    with open(outdir / f"predictions_{tag}.json", "w", encoding="utf-8") as f:
         json.dump([{"pred": p, "ref": r} for p, r in zip(preds, refs)], f, indent=2)
 
-    with open(outdir / f"samples_{args.split}.txt", "w", encoding="utf-8") as f:
+    with open(outdir / f"samples_{tag}.txt", "w", encoding="utf-8") as f:
         for i in range(min(30, len(preds))):
             f.write(f"[{i}]\nPRED: {preds[i]}\nREF : {refs[i]}\n\n")
 
@@ -234,7 +256,7 @@ def main():
         print(f"PRED: {preds[i]}\nREF : {refs[i]}\n")
 
     metrics = {"checkpoint": str(args.ckpt), "split": args.split,
-               "n": len(preds), "beams": args.beams,
+               "n": len(preds), "limit": args.limit, "beams": args.beams,
                "val_loss_at_ckpt": ck.get("val_loss")}
     metrics["degeneracy"] = degeneracy_report(preds)
     print("degeneracy:", json.dumps(metrics["degeneracy"], indent=2))
@@ -245,7 +267,7 @@ def main():
         metrics.update(compute_bertscore(preds, refs, args.bertscore_model))
         metrics["bertscore_model"] = args.bertscore_model
 
-    with open(outdir / f"metrics_{args.split}.json", "w", encoding="utf-8") as f:
+    with open(outdir / f"metrics_{tag}.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
     print("\n--- metrics ---")

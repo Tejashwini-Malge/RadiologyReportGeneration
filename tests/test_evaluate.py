@@ -143,3 +143,34 @@ def test_checkpoint_is_memory_mapped_when_supported(tmp_path, monkeypatch):
     except Exception:
         pytest.skip("mmap unsupported on this torch/filesystem")
     assert calls[-1] is True
+
+
+# ---------------- eval output isolation ----------------
+#
+# decoder_training.ckpt_dir() sends --limit runs to checkpoints/limit<N>/ so a
+# toy run cannot clobber a real best.pt. evaluate.py wrote to a single
+# <checkpoints_dir>/eval/ regardless, so the same hazard survived on the
+# metrics side: scoring a subset overwrote the full run's numbers.
+
+def test_eval_outputs_land_next_to_their_checkpoint(tmp_path):
+    full = tmp_path / "best.pt"
+    subset = tmp_path / "limit1000" / "best.pt"
+    assert ev.eval_outdir(full) == tmp_path / "eval"
+    assert ev.eval_outdir(subset) == tmp_path / "limit1000" / "eval"
+
+
+def test_a_subset_checkpoint_cannot_overwrite_a_full_runs_metrics(tmp_path):
+    full = ev.eval_outdir(tmp_path / "best.pt") / "metrics_test.json"
+    subset = ev.eval_outdir(tmp_path / "limit1000" / "best.pt") / "metrics_test.json"
+    assert full != subset
+
+
+def test_row_capped_runs_get_their_own_filenames():
+    assert ev.output_tag("test", None) == "test"
+    assert ev.output_tag("test", 64) == "test_limit64"
+    assert ev.output_tag("valid", 8) == "valid_limit8"
+
+
+def test_capped_and_uncapped_scores_of_one_checkpoint_do_not_collide():
+    """Scoring 8 rows and scoring all 9,927 are different results."""
+    assert ev.output_tag("test", None) != ev.output_tag("test", 8)

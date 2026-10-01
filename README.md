@@ -224,9 +224,15 @@ and BERTScore. `--ckpt` is required; a bare name is resolved against
 `checkpoints_dir`, so `best.pt`, `limit1000/best.pt` and an absolute path all
 work. Add `--no-bertscore` to skip the ~1.4 GB `roberta-large` download.
 
-Outputs land in `<checkpoints_dir>/eval/`. Read `samples_<split>.txt` before the
-metrics -- a low BLEU with degenerate text is a different problem from a low
-BLEU with fluent but wrong text, and only the samples distinguish them.
+Outputs land in an `eval/` directory **next to the checkpoint being scored**, so
+`--ckpt best.pt` writes to `checkpoints/eval/` and `--ckpt limit1000/best.pt`
+writes to `checkpoints/limit1000/eval/`. Capping rows with `--limit N` tags the
+filenames `<split>_limit<N>`. Both rules exist for one reason: a subset score and
+a full score are different results and must never share a path.
+
+Read `samples_<tag>.txt` before the metrics -- a low BLEU with degenerate text is
+a different problem from a low BLEU with fluent but wrong text, and only the
+samples distinguish them.
 
 ---
 
@@ -251,14 +257,42 @@ data ends up silently training a real run.
 
 What this established: images decode, Swin emits `[N, 49, 1024]`, the 1024 -> 768
 projection feeds the decoder without shape errors, validation loss fell
-monotonically 12.14 -> 9.48 across ten epochs, checkpoints round-trip, beam-search
-generation runs, and BLEU/ROUGE compute.
+monotonically 10.66 -> 9.50 across ten epochs (`checkpoints/history.json`),
+checkpoints round-trip, beam-search generation runs, and BLEU/ROUGE compute.
 
-What it does **not** establish is model quality. Ten examples cannot teach a
-~140M-parameter decoder radiology grammar, so BLEU-4 is ~0.0007 and the captions
-are word salad. That is the expected result of a working pipeline at this data
-scale, not evidence about the architecture. The degeneracy check reported
-`unique_ratio: 1.0` -- undertrained, but not mode-collapsed.
+### Smoke-test scores
+
+Scored from `best.pt` (epoch 10, val_loss 9.4960) on the 8-row test slice,
+4 beams, `--no-bertscore`:
+
+| Metric | Score |
+|---|---:|
+| BLEU-1 | 0.0176 |
+| BLEU-2 | 0.0073 |
+| BLEU-3 | 0.0025 |
+| BLEU-4 | 0.0015 |
+| ROUGE-1 | 0.0395 |
+| ROUGE-2 | 0.0045 |
+| ROUGE-L | 0.0395 |
+
+Degeneracy: `unique_ratio` 1.0 (8/8 distinct), `most_common_share` 0.125,
+`mean_pred_len_words` 42.62, `empty_preds` 0.
+
+**Report these as pipeline evidence, never as model quality.** Ten examples
+cannot teach a ~140M-parameter decoder radiology grammar; the captions are
+function-word salad, and one sample collapses onto BioBART's pretrained
+biomedical vocabulary (`primary`, `vitro`, `focal`, `renal`) with no visual
+grounding at all. A BLEU-4 of 0.0015 is the *correct* result for a working
+pipeline at this data scale. Published ROCOv2/RRG baselines sit around BLEU-1
+0.35-0.45 and BLEU-4 0.08-0.15; the gap is compute, not code.
+
+Note that `unique_ratio: 1.0` is passing for a trivial reason here -- the outputs
+are all distinct *noise*. The degeneracy check only becomes a meaningful signal
+at real data scale, where one generic sentence for every image is the failure
+mode it is built to catch.
+
+Regenerate these numbers with the `evaluate.py` line in the block above; they are
+written to `checkpoints/eval/metrics_test.json`.
 
 ---
 
@@ -268,12 +302,14 @@ scale, not evidence about the architecture. The degeneracy check reported
 pytest
 ```
 
-109 tests, CPU-only, no dataset or GPU required. They cover the config loader and
+113 tests, CPU-only, no dataset or GPU required. They cover the config loader and
 its environment overrides, CUI parsing and the multi-label metric math, caption
 collation and label masking, checkpoint save/resume round-trips, the evaluation
-metrics and degeneracy check, and -- most importantly -- the overwrite guard and
-dry-run isolation in `extract_features.py`, which exist because a stray re-run
-once destroyed a complete 5.8 GB `train.h5`.
+metrics and degeneracy check, and -- most importantly -- the isolation guards:
+the overwrite guard and dry-run quarantine in `extract_features.py`, which exist
+because a stray re-run once destroyed a complete 5.8 GB `train.h5`, and the
+matching per-checkpoint eval output paths, which exist because a subset score
+used to overwrite a full run's `metrics_test.json`.
 
 CI runs it on Python 3.10-3.12 and additionally checks that `config.yaml` still
 matches what `make_config.py` generates.
@@ -301,10 +337,10 @@ matches what `make_config.py` generates.
 | Dataset pre-flight (`load_Dataset.py`) | complete; column names validated against `config.yaml` |
 | Feature extraction (`extract_features.py`) | complete; overwrite guard and isolated dry runs |
 | Decoder training (`decoder_training.py`) | complete; resume-capable, early stopping, warmup clamp for short runs |
-| Evaluation (`evaluate.py`) | complete; BLEU-1..4, ROUGE-1/2/L, BERTScore, degeneracy report |
+| Evaluation (`evaluate.py`) | complete; BLEU-1..4, ROUGE-1/2/L, BERTScore, degeneracy report; outputs isolated per checkpoint |
 | End-to-end validation | done on a 26-row real-data slice — see **Pipeline validation** |
-| Test suite and CI | 109 tests, CPU-only, no dataset required |
-| **Full-scale GPU training** | **pending — no trained checkpoint or reportable metrics yet** |
+| Test suite and CI | 113 tests, CPU-only, no dataset required |
+| **Full-scale GPU training** | **pending — the only scores that exist are from the 8-row smoke slice and say nothing about model quality** |
 
 The architecture is implemented and the pipeline is proven to run. The remaining
 work is compute, not code: feature extraction over all 79,793 images, then the
